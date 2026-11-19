@@ -12,8 +12,9 @@ compatibility_flags = ["nodejs_compat"]
 # every page is rendered by React Router, which answers 404 for a path no
 # route matches.
 #
-# Keep `not_found_handling = "none"`. "single-page-application" would answer
-# every page load but "/" with a file that doesn't exist in this build.
+# Keep `not_found_handling = "none"`. With "single-page-application", once an
+# index.html is in the build (a prerendered "/" or one in public/), every page
+# load no file matches would get that file instead of its own rendered page.
 [assets]
 directory = "./dist/client"
 binding = "ASSETS"
