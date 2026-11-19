@@ -16,7 +16,8 @@
 // what the server rendered it with, so the server's HydrateFallback HTML is never left on the page.
 // It also checks what the server does with errors (an /api/* route's error answers JSON, a page's error the
 // app's own error page, a server build that can't load is thrown on, an unknown path is not logged), the lint
-// rules against React Router 7 and Remix habits, `requireEnv` and the logging fetch.
+// rules against React Router 7 and Remix habits and against an auth call left without `await`, `requireEnv` and
+// the logging fetch.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -695,14 +696,21 @@ describe('the built Worker', () => {
 });
 
 describe('the lint rules', () => {
-  let dir;
-
-  before(() => {
-    dir = makeCopy('webdiy-lint-');
-    fs.writeFileSync(
-      path.join(dir, 'src', 'routes', 'check-lint.tsx'),
-      `import { Link } from 'react-router-dom';
+  // A fixture line ending in `// refused: await` must give exactly one "write `await`" error, one ending in
+  // `// refused: name` exactly one "under their own names" error, and no other line any error of that kind.
+  const ROUTE = `import { Link } from 'react-router-dom';
 import { json } from '@remix-run/cloudflare';
+import { getAuthToken } from '@/lib/neon-auth';
+
+export async function clientLoader() {
+  if (!getAuthToken()) { // refused: await
+    return null;
+  }
+
+  const token = await getAuthToken();
+
+  return { token };
+}
 
 type Context = { cloudflare: { env: Record<string, string> } };
 
@@ -713,18 +721,136 @@ export function loader({ context }: { context: Context }) {
 export function action({ context: { cloudflare } }: { context: Context }) {
   return cloudflare.env;
 }
-`,
-    );
-    fs.writeFileSync(
-      path.join(dir, 'src', 'server', 'check-lint.ts'),
-      `type Context = { cloudflare: { env: Record<string, string> } };
+`;
+  // Every way a model plausibly checks the caller without `await`, each of which lets every caller through,
+  // and the awaited and chained forms, which must stay allowed.
+  const SERVER = `import { verifyAuthToken } from './neon-auth/require-user';
+import * as auth from './neon-auth/require-user';
+import { verifyAuthToken as checkCaller } from './neon-auth/require-user'; // refused: name
+export { verifyAuthToken as checkUser } from './neon-auth/require-user'; // refused: name
+
+type Context = { cloudflare: { env: Record<string, string> } };
+const denied = () => new Response('Sign in first.', { status: 401 });
+
+export function negated(request: Request) {
+  const user = verifyAuthToken(request); // refused: await
+  return !user ? denied() : null;
+}
+
+export function strictNull(request: Request) {
+  const user = verifyAuthToken(request); // refused: await
+  return user === null ? denied() : null;
+}
+
+export function looseNull(request: Request) {
+  const user = verifyAuthToken(request); // refused: await
+  if (user == null) {
+    return denied();
+  }
+  return null;
+}
+
+export function boolean(request: Request) {
+  const signedIn = Boolean(verifyAuthToken(request)); // refused: await
+  return signedIn ? null : denied();
+}
+
+export function ifNot(request: Request) {
+  if (!verifyAuthToken(request)) { // refused: await
+    return denied();
+  }
+  return null;
+}
+
+export function passedOn(request: Request) {
+  return verifyAuthToken(request); // refused: await
+}
+
+export function throughNamespace(request: Request) {
+  return auth.verifyAuthToken(request); // refused: await
+}
+
+export async function awaited(request: Request) {
+  const user = await verifyAuthToken(request);
+  if (!user) {
+    return denied();
+  }
+  return user.sub;
+}
+
+export async function returnedAwaited(request: Request) {
+  return await auth.verifyAuthToken(request);
+}
+
+export function chained(request: Request) {
+  return verifyAuthToken(request).then((user) => (user ? user.sub : null));
+}
+
+export const aliased = checkCaller;
+
+export function destructured() {
+  const { verifyAuthToken: fromNamespace } = auth; // refused: name
+  return fromNamespace;
+}
+
+export async function destructuredImport() {
+  const { verifyAuthToken: loaded } = await import('./neon-auth/require-user'); // refused: name
+  return loaded;
+}
+
+export function sameName() {
+  const { verifyAuthToken } = auth;
+  return verifyAuthToken;
+}
+
+export const notAPattern = { verifyAuthToken: checkCaller };
+
+export async function awaitedOptional(request: Request) {
+  return await verifyAuthToken?.(request);
+}
+
+export function optionalNotAwaited(request: Request) {
+  return verifyAuthToken?.(request); // refused: await
+}
+
+export async function awaitedCast(request: Request) {
+  return await (verifyAuthToken(request) as Promise<{ sub: string } | null>);
+}
+
+export function castNotAwaited(request: Request) {
+  return verifyAuthToken(request) as Promise<{ sub: string } | null>; // refused: await
+}
 
 export function read(context: Context) {
   const { cloudflare } = context;
   return cloudflare.env;
 }
-`,
-    );
+`;
+  // A .tsx file under src/server is server code too.
+  const SERVER_TSX = `import { verifyAuthToken } from './neon-auth/require-user';
+
+export function inTsx(request: Request) {
+  return verifyAuthToken(request); // refused: await
+}
+`;
+  const FILES = {
+    'src/routes/check-lint.tsx': ROUTE,
+    'src/server/check-lint.ts': SERVER,
+    'src/server/check-lint.page.tsx': SERVER_TSX,
+  };
+  // How many load-context lines each fixture holds.
+  const LOAD_CONTEXT = {
+    'src/routes/check-lint.tsx': 2,
+    'src/server/check-lint.ts': 1,
+    'src/server/check-lint.page.tsx': 0,
+  };
+  let dir;
+
+  before(() => {
+    dir = makeCopy('webdiy-lint-');
+    for (const [file, source] of Object.entries(FILES)) {
+      fs.writeFileSync(path.join(dir, file), source);
+    }
   });
 
   after(() => {
@@ -733,32 +859,55 @@ export function read(context: Context) {
     }
   });
 
-  test('refuse react-router-dom, @remix-run/* and the React Router 7 load context; the template itself is clean', () => {
+  const marked = (source, mark) =>
+    source.split('\n').flatMap((line, i) => (line.endsWith(`// refused: ${mark}`) ? [i + 1] : []));
+
+  test('refuse react-router-dom, @remix-run/*, the React Router 7 load context and an auth call without await; the template itself is clean', () => {
     const run = spawnSync(
       process.execPath,
       ['node_modules/eslint/bin/eslint.js', '--format', 'json', '.'],
       { cwd: dir, encoding: 'utf8', env: { ...process.env, FORCE_COLOR: '0' } },
     );
     const results = JSON.parse(run.stdout);
-    const found = results.flatMap((r) =>
-      r.messages.map((m) => `${path.relative(dir, r.filePath)} ${m.ruleId}: ${m.message}`),
+    const messages = results.flatMap((r) =>
+      r.messages.map((m) => ({ ...m, file: path.relative(dir, r.filePath) })),
     );
-    const restricted = (file, rule) => found.filter((f) => f.startsWith(file) && f.includes(rule));
+    const found = messages.map((m) => `${m.file}:${m.line} ${m.ruleId}: ${m.message}`);
+    const lines = (file, rule, text) =>
+      messages
+        .filter((m) => m.file === file && m.ruleId === rule && m.message.includes(text))
+        .map((m) => m.line);
 
     assert.equal(
-      restricted('src/routes/check-lint.tsx', 'no-restricted-imports').length,
+      lines('src/routes/check-lint.tsx', 'no-restricted-imports', '').length,
       2,
       found.join('\n'),
     );
-    assert.equal(
-      restricted('src/routes/check-lint.tsx', 'no-restricted-syntax').length,
-      2,
-      found.join('\n'),
-    );
-    assert.equal(
-      restricted('src/server/check-lint.ts', 'no-restricted-syntax').length,
-      1,
-      found.join('\n'),
+
+    for (const file of Object.keys(FILES)) {
+      assert.equal(
+        lines(file, 'no-restricted-syntax', 'no load context').length,
+        LOAD_CONTEXT[file],
+        found.join('\n'),
+      );
+      assert.deepEqual(
+        lines(file, 'no-restricted-syntax', 'write `await` before the call'),
+        marked(FILES[file], 'await'),
+        found.join('\n'),
+      );
+      assert.deepEqual(
+        lines(file, 'no-restricted-syntax', 'under their own names'),
+        marked(FILES[file], 'name'),
+        found.join('\n'),
+      );
+    }
+
+    // The server fixtures' only errors are the ones they were written to give.
+    assert.deepEqual(
+      messages
+        .filter((m) => m.file.startsWith('src/server/') && m.ruleId !== 'no-restricted-syntax')
+        .map((m) => `${m.file}:${m.line} ${m.ruleId}: ${m.message}`),
+      [],
     );
     assert.ok(
       found.every((f) => f.includes('/check-lint.')),
