@@ -23,16 +23,53 @@ const routerImportRule = {
         },
         {
           group: ['@remix-run/*'],
-          message: "Remix 2 packages don't exist here: import from 'react-router' (and return plain objects or data() from loaders).",
+          message:
+            "Remix 2 packages don't exist here: import from 'react-router' (and return plain objects or data() from loaders).",
         },
       ],
     },
   ],
 };
 
+/*
+ * React Router 7's load context (`context.cloudflare.env`) is not passed in
+ * this app: under React Router 8 reading it throws on every request. Bindings
+ * come from `import { env } from 'cloudflare:workers'`.
+ */
+const LOAD_CONTEXT_MESSAGE =
+  "There is no load context here: read bindings with `import { env } from 'cloudflare:workers'`.";
+
+const loadContextRule = {
+  'no-restricted-syntax': [
+    'error',
+    {
+      selector: "MemberExpression[object.name='context'][property.name='cloudflare']",
+      message: LOAD_CONTEXT_MESSAGE,
+    },
+    {
+      selector: "Property[key.name='context'] > ObjectPattern > Property[key.name='cloudflare']",
+      message: LOAD_CONTEXT_MESSAGE,
+    },
+    {
+      selector:
+        "VariableDeclarator[init.name='context'] > ObjectPattern > Property[key.name='cloudflare']",
+      message: LOAD_CONTEXT_MESSAGE,
+    },
+  ],
+};
+
 export default tseslint.config(
   // The neon-auth vendor dir is third-party code kept verbatim — see its README.
-  { ignores: ['dist', '.wrangler', '.react-router', 'worker-configuration.d.ts', 'src/server/neon-auth/vendor'] },
+  {
+    ignores: [
+      'dist',
+      '.wrangler',
+      '.react-router',
+      '.github',
+      'worker-configuration.d.ts',
+      'src/server/neon-auth/vendor',
+    ],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['src/**/*.{ts,tsx}'],
@@ -47,6 +84,7 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       ...routerImportRule,
+      ...loadContextRule,
     },
   },
   {
@@ -56,6 +94,6 @@ export default tseslint.config(
       ecmaVersion: 2022,
       globals: { ...globals.serviceworker },
     },
-    rules: routerImportRule,
+    rules: { ...routerImportRule, ...loadContextRule },
   },
 );
