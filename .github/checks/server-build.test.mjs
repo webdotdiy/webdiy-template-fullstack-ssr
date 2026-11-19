@@ -12,6 +12,8 @@
 // title, description, og:title and text. The fixture routes import the browser's auth client module the way
 // an app's sign-in page does, so a client made when that module loads (or made on the server) fails here, and
 // so does an auth SDK the server evaluates to render a page (the SDK is imported in the browser only).
+// A fixture page with a clientLoader and a HydrateFallback checks that the browser's files for every route export
+// what the server rendered it with, so the server's HydrateFallback HTML is never left on the page.
 // It also checks what the server does with errors (an /api/* route's error answers JSON, a page's error the
 // app's own error page, a server build that can't load is thrown on, an unknown path is not logged), the lint
 // rules against React Router 7 and Remix habits, `requireEnv` and the logging fetch.
@@ -128,6 +130,42 @@ export default function CheckData({ loaderData }: { loaderData: { rows: string[]
       <button type="button" onClick={() => void getAuthToken().then(() => createDataClient())}>
         Load
       </button>
+    </main>
+  );
+}
+`,
+  },
+  {
+    file: 'routes/check-client-loader.tsx',
+    path: '/check-client-loader',
+    title: 'Check client loader',
+    text: 'Loading the list',
+    source: `import { getAuthClient } from '@/lib/neon-auth';
+
+export const meta = () => [
+  { title: 'Check client loader' },
+  { name: 'description', content: 'A page whose data comes from its clientLoader.' },
+  { property: 'og:title', content: 'Check client loader' },
+];
+
+export async function clientLoader() {
+  const auth = await getAuthClient();
+  return { rows: ['Row A', 'Row B'], signIn: typeof auth.signIn.email };
+}
+
+export function HydrateFallback() {
+  return <p>Loading the list</p>;
+}
+
+export default function CheckClientLoader({ loaderData }: { loaderData: { rows: string[] } }) {
+  return (
+    <main>
+      <h1>Check client loader</h1>
+      <ul>
+        {loaderData.rows.map((row) => (
+          <li key={row}>{row}</li>
+        ))}
+      </ul>
     </main>
   );
 }
@@ -301,6 +339,52 @@ function renderedChunks(entry) {
   return [...seen];
 }
 
+/** The names a built browser file exports, as the bundler writes them (`export{a as default,b as meta}`). */
+function exportedNames(file) {
+  const code = fs.readFileSync(file, 'utf8');
+  const names = new Set();
+
+  for (const m of code.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
+    for (const part of m[1].split(',')) {
+      const name = part
+        .trim()
+        .split(/\s+as\s+/)
+        .pop();
+
+      if (name) {
+        names.add(name);
+      }
+    }
+  }
+
+  for (const m of code.matchAll(
+    /\bexport\s+(?:async\s+)?(?:function\*?|const|let|var|class)\s+([\w$]+)/g,
+  )) {
+    names.add(m[1]);
+  }
+
+  if (/\bexport\s+default\b/.test(code)) {
+    names.add('default');
+  }
+
+  return names;
+}
+
+/** A route module's exports the browser renders or runs with. */
+const BROWSER_EXPORTS = [
+  'default',
+  'Layout',
+  'ErrorBoundary',
+  'HydrateFallback',
+  'clientLoader',
+  'clientAction',
+  'clientMiddleware',
+  'meta',
+  'links',
+  'handle',
+  'shouldRevalidate',
+];
+
 function makeCopy(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   copyTemplate(ROOT, dir);
@@ -458,6 +542,45 @@ describe('the built Worker', () => {
     assert.ok(
       all.some((file) => fs.readFileSync(file, 'utf8').includes(SDK_MARK)),
       `no chunk of the server build holds "${SDK_MARK}": the auth SDK's marker has changed`,
+    );
+  });
+
+  test('the browser loads every export a route renders with: no HydrateFallback is left out', async () => {
+    const assetsDir = path.join(path.dirname(serverEntry), 'assets');
+    const serverBuildFile = fs.readdirSync(assetsDir).find((f) => /^server-build-.*\.js$/.test(f));
+    assert.ok(serverBuildFile, 'the build wrote dist/server/assets/server-build-*.js');
+    const { routes, assets } = await import(
+      pathToFileURL(path.join(assetsDir, serverBuildFile)).href
+    );
+    const clientDir = path.join(work, 'dist', 'client');
+    const missing = [];
+
+    for (const [id, route] of Object.entries(routes)) {
+      const rendered = Object.keys(route.module).filter((name) => BROWSER_EXPORTS.includes(name));
+      const entry = assets.routes[id];
+      const files = [
+        entry.module,
+        entry.clientLoaderModule,
+        entry.clientActionModule,
+        entry.clientMiddlewareModule,
+        entry.hydrateFallbackModule,
+      ].filter(Boolean);
+      const loaded = new Set(files.flatMap((f) => [...exportedNames(path.join(clientDir, f))]));
+      const lost = rendered.filter((name) => !loaded.has(name));
+
+      if (lost.length > 0) {
+        missing.push(`${id}: ${lost.join(', ')} (browser files: ${files.join(', ')})`);
+      }
+    }
+
+    assert.ok(
+      Object.keys(routes['routes/check-client-loader'].module).includes('HydrateFallback'),
+      'the client loader fixture renders a HydrateFallback on the server',
+    );
+    assert.deepEqual(
+      missing,
+      [],
+      "a route's browser files leave out exports the server renders it with",
     );
   });
 

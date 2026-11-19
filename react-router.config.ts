@@ -7,9 +7,14 @@ import type { Config } from '@react-router/dev/config';
  *
  *   appDirectory  the routes, root.tsx and the entry files live in src/
  *   buildDirectory  the build writes dist/client (assets) and dist/server (the Worker)
+ *   splitRouteModules  keep it false: each route's clientLoader, clientAction
+ *     and HydrateFallback stay in the route's own browser file. Split apart,
+ *     the browser loads a route without its HydrateFallback, and the
+ *     fallback's HTML from the server stays on the page above the route.
  */
 export default {
   appDirectory: 'src',
   buildDirectory: 'dist',
   ssr: true,
+  splitRouteModules: false,
 } satisfies Config;
