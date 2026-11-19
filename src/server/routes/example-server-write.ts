@@ -27,6 +27,28 @@ import { verifyAuthToken } from '../neon-auth/require-user';
  * With that policy RLS no longer restricts the route: this route IS the
  * permission check. Verify the caller, validate the body, and scope every
  * statement yourself.
+ *
+ * Everything you need is here; there is no need to read the packages in
+ * node_modules:
+ *   - Check the caller first, exactly like this:
+ *       const user = await verifyAuthToken(c.req.raw);
+ *       if (!user) return c.json({ error: 'Sign in first.' }, 401);
+ *     `user` is the caller's verified token claims, or null when the request
+ *     has no valid token. `user.sub` is their id (text; the same value as
+ *     `auth.user_id()`). Never leave out the `await`: without it `user` is a
+ *     Promise, which is never null or false, so every check of it would let
+ *     every caller through (lint refuses the call without it). The browser
+ *     sends the token as `Authorization: Bearer <token>` from
+ *     `getAuthToken()` (src/lib/neon-auth.ts).
+ *   - `const sql = neon(url)` is a tagged template:
+ *     const rows = await sql`select * from tasks where id = ${id}`;
+ *     gives the rows, an array of objects. Every `${value}` is sent as a
+ *     parameter, never pasted into the SQL.
+ *   - A route loader reads the same way, with the binding from
+ *     `import { env } from 'cloudflare:workers'`:
+ *     `neon(requireEnv(env, 'DATABASE_URL'))`, with `requireEnv` from
+ *     '@/server/env' (a whole loader is in src/lib/neon-data.ts's notes).
+ *   - Zod 4: `z.email()`, `z.uuid()`, `z.url()` (`z.string().email()` is deprecated).
  */
 
 type Bindings = { DATABASE_URL?: string };

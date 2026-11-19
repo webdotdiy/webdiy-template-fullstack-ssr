@@ -70,7 +70,7 @@ export default function CheckSignIn() {
     file: 'routes/check-server-use.tsx',
     path: '/check-server-use',
     title: 'Server use of the auth client',
-    text: 'runs in the browser only',
+    text: 'a page load sends no Authorization header, so verifyAuthToken(request) is null there',
     source: `import { getAuthClient } from '@/lib/neon-auth';
 
 export function loader() {
@@ -681,4 +681,69 @@ describe('the server and browser helpers', () => {
       globalThis.fetch = realFetch;
     }
   });
+});
+
+describe('the usage notes', () => {
+  // What a model building on the template would otherwise look for in node_modules or the vendor's docs: each
+  // file's header must answer it.
+  const NOTES = {
+    'src/lib/neon-auth.ts': [
+      'no need to read the SDK in node_modules',
+      'useAuthSession()',
+      'await getAuthClient()',
+      'auth.signUp.email({ email, password, name })',
+      'auth.signIn.email({ email, password })',
+      'auth.signOut()',
+      'data.user.id',
+      'throws: wrap the call in try/catch',
+      'getAuthToken()',
+      'safe to import anywhere, a route module included',
+      'a page load sends no `Authorization` header',
+      'never read the session cookie yourself',
+      'await verifyAuthToken(c.req.raw)',
+    ],
+    'src/lib/neon-data.ts': [
+      'no need to read the packages in node_modules',
+      ".from('todos').select('*')",
+      '.insert({ title }).select().single()',
+      ".update({ done: true }).eq('id', id)",
+      ".delete().eq('id', id)",
+      "doesn't throw on a database error",
+      '`authenticated` role, which already has SELECT, INSERT, UPDATE and DELETE',
+      'A migration needs no GRANT for a table',
+      'uuid default gen_random_uuid()',
+      'a `serial` column',
+      'grant usage on sequence',
+      'enable row level security',
+      'auth.user_id()',
+      "in its route's `loader`",
+      "neon(requireEnv(env, 'DATABASE_URL'))",
+      'never where a module loads',
+    ],
+    'src/server/routes/example-server-write.ts': [
+      'no need to read the packages in node_modules',
+      'const user = await verifyAuthToken(c.req.raw);',
+      "if (!user) return c.json({ error: 'Sign in first.' }, 401);",
+      'Never leave out the `await`',
+      'user.sub',
+      'const sql = neon(url)',
+      'await sql`select',
+      "import { env } from 'cloudflare:workers'",
+      "neon(requireEnv(env, 'DATABASE_URL'))",
+      'z.email()',
+      'create policy server_access on tasks to app_rw',
+    ],
+  };
+
+  for (const [file, phrases] of Object.entries(NOTES)) {
+    test(`${file} says how to use it`, () => {
+      const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
+      // The header as one line: each comment line's ` * ` (and a `// ` inside an example) joined by a space.
+      const header = source
+        .slice(0, source.indexOf('*/') + 2)
+        .replace(/\n \*\s*(?:\/\/\s*)?/g, ' ');
+      const missing = phrases.filter((phrase) => !header.includes(phrase));
+      assert.deepEqual(missing, [], `${file}'s header comment no longer says these`);
+    });
+  }
 });

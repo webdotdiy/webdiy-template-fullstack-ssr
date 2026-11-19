@@ -37,8 +37,12 @@ import { useSyncExternalStore } from 'react';
  *     // src/lib/neon-data.ts attaches it already.
  *
  * Never call getAuthClient() or getAuthToken() in a loader, an action, a
- * component's render or server code: they throw there. Server routes read the
- * caller from the request with verifyAuthToken
+ * component's render or server code: they throw there. A loader or action has
+ * no token to check either: a page load sends no `Authorization` header, so
+ * `verifyAuthToken(request)` is null there. Load what only a signed-in user
+ * may see in the browser (a clientLoader or an effect, through the Data API or
+ * this app's /api/* routes), and never read the session cookie yourself. This
+ * app's /api/* routes read the caller with `await verifyAuthToken(c.req.raw)`
  * (src/server/neon-auth/require-user.ts).
  *
  * Until the project's database is turned on, neonAuthEnabled is false and
@@ -52,7 +56,10 @@ function serverUse(name: string): Error {
   return new Error(
     `${name} runs in the browser only, and this call ran on the server. In a component, read the ` +
       `session with useAuthSession(); call ${name} in an event handler, an effect or a clientLoader. ` +
-      'Server routes read the caller from the request with verifyAuthToken (src/server/neon-auth/require-user.ts).',
+      'A loader or action has no token to check: a page load sends no Authorization header, so verifyAuthToken(request) ' +
+      'is null there. Load what only a signed-in user may see in the browser (a clientLoader or an effect, through the ' +
+      "Data API or this app's /api/* routes), and never read the session cookie yourself. This app's /api/* routes " +
+      'read the caller with `await verifyAuthToken(c.req.raw)` (src/server/neon-auth/require-user.ts).',
   );
 }
 

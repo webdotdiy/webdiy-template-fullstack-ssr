@@ -22,7 +22,8 @@ type Bindings = NeonAuthBindings & {
  *
  * Neon Auth first-party proxy — sessions live as host-only cookies on THIS
  * origin. Answers 501 until the project's database/auth is provisioned.
- * Protect your own routes with `verifyAuthToken` from `./neon-auth/require-user`.
+ * Protect your own routes with `await verifyAuthToken(c.req.raw)` from
+ * `./neon-auth/require-user`.
  */
 const app = new Hono<{ Bindings: Bindings }>()
   .use('/api/*', cors())
@@ -44,7 +45,10 @@ app.onError((err, c) => {
 
   if (import.meta.env.DEV) {
     return c.json(
-      { error: err instanceof Error ? err.message : String(err), stack: err instanceof Error ? err.stack : undefined },
+      {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      },
       500,
     );
   }
@@ -60,7 +64,10 @@ app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
  * and actions read bindings with `import { env } from 'cloudflare:workers'`;
  * no load context is passed (React Router 8 refuses a plain object here).
  */
-const renderPage = createRequestHandler(() => import('virtual:react-router/server-build'), import.meta.env.MODE);
+const renderPage = createRequestHandler(
+  () => import('virtual:react-router/server-build'),
+  import.meta.env.MODE,
+);
 
 app.all('*', (c) => renderPage(c.req.raw));
 

@@ -48,7 +48,7 @@ pnpm cf-typegen  # wrangler types: regenerate the binding types
 
 ## Rules this shape needs
 
-- **Bindings** (secrets, the database URL): `import { env } from 'cloudflare:workers'` in loaders, actions and server code. There is no load context (`context.cloudflare` throws in React Router 8; lint refuses it).
+- **Bindings** (secrets, the database URL): `import { env } from 'cloudflare:workers'` in loaders, actions and server code, each read with `requireEnv(env, 'DATABASE_URL')` from `src/server/env.ts` (in a route module a binding's value has no type). There is no load context (`context.cloudflare` throws in React Router 8; lint refuses it).
 - **Browser-only code** (`window`, `localStorage`, the auth client) runs in effects, event handlers or a `clientLoader`, never during render. Nothing random or time-based in what a page renders: the server's HTML and the browser's first render must match.
 - **A page's data** comes from its route `loader`; its title and description from its `meta` export (`meta` receives `loaderData`). Long lists are paginated: a page is rendered within the Worker's CPU allowance.
 
@@ -57,8 +57,8 @@ pnpm cf-typegen  # wrangler types: regenerate the binding types
 On WebDIY, turning on the project's database provisions a Neon Postgres database and Neon Auth: `VITE_NEON_AUTH_URL`, `VITE_NEON_JWKS_URL` and `VITE_NEON_DATA_API_URL` arrive in `.env` (public addresses), and `NEON_AUTH_COOKIE_SECRET` and `DATABASE_URL` reach the Worker as bindings. Until then `/api/auth/*` answers 501.
 
 - **Sign-in:** `src/lib/neon-auth.ts` is safe to import from any route: the auth client is loaded in the browser only, on first use. In a component, `useAuthSession()` gives the session (signed out and pending on the server and during hydration); in an event handler, `const auth = await getAuthClient()`, then `auth.signIn.email(...)`, `auth.signUp.email(...)`, `auth.signOut()`. Sessions are first-party, host-only cookies on the app's own address.
-- **User data:** the Data API (`createDataClient()` in `src/lib/neon-data.ts`) with the signed-in user's token; Postgres row-level security decides what each user may read and write.
-- **Writes row-level security can't express:** a Hono route that checks the caller (`verifyAuthToken`), validates the body and writes with `DATABASE_URL`, as `src/server/routes/example-server-write.ts` shows.
+- **User data:** the Data API (`createDataClient()` in `src/lib/neon-data.ts`, in the browser) with the signed-in user's token; Postgres row-level security decides what each user may read and write. A page signed-out visitors and crawlers read gets its data in its `loader`, through `DATABASE_URL`: `neon(requireEnv(env, 'DATABASE_URL'))` (a whole loader is in `src/lib/neon-data.ts`'s notes).
+- **Writes row-level security can't express:** a Hono route that checks the caller (`await verifyAuthToken(c.req.raw)`), validates the body and writes with `DATABASE_URL`, as `src/server/routes/example-server-write.ts` shows.
 
 Outside WebDIY, `.env.example` lists every name: put the public addresses in `.env`, the secrets in `.dev.vars`, and `wrangler secret put` each secret before the first deploy.
 
