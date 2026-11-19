@@ -1019,3 +1019,502 @@ describe('the usage notes', () => {
     });
   }
 });
+
+/*
+ * The code the template teaches: every code line and every inline `code` in README.md, in the comments of the
+ * template's own source and eslint.config.js, and in their messages (a string holding `code`). Each one must be
+ * part of a piece of NOTE_CODE below, which the next section writes into a copy of the template exactly as the
+ * notes write it and type-checks, builds and lints there; or be listed in NOT_TYPESCRIPT with the reason it isn't
+ * compiled. A new example in a note without its NOTE_CODE entry fails here.
+ */
+const NOTE_SOURCES = ['README.md', 'eslint.config.js'];
+const NOT_NOTES = new Set(['src/server/neon-auth/vendor']);
+
+/** Text a model reads: the comments, and the strings that hold `code` (messages), of one source file. */
+async function taughtTexts(rel) {
+  const text = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+  if (rel.endsWith('.md')) {
+    return [{ markdown: true, text }];
+  }
+
+  const { default: ts } = await import(
+    pathToFileURL(path.join(ROOT, 'node_modules/typescript/lib/typescript.js')).href
+  );
+  const kind = rel.endsWith('.tsx')
+    ? ts.ScriptKind.TSX
+    : rel.endsWith('.js')
+      ? ts.ScriptKind.JS
+      : ts.ScriptKind.TS;
+  const file = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, kind);
+  const comments = new Map();
+  const strings = [];
+  const visit = (node) => {
+    for (const range of [
+      ...(ts.getLeadingCommentRanges(text, node.getFullStart()) ?? []),
+      ...(ts.getTrailingCommentRanges(text, node.getEnd()) ?? []),
+    ]) {
+      comments.set(range.pos, text.slice(range.pos, range.end));
+    }
+
+    if (ts.isStringLiteral(node) && node.text.includes('`')) {
+      strings.push(node.text);
+    }
+
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+
+  return [
+    ...[...comments.values()].map((c) => ({
+      text: c.startsWith('//')
+        ? c.slice(2)
+        : c
+            .slice(2, -2)
+            .split('\n')
+            .map((line) => line.replace(/^\s*\*(?!\/)/, ''))
+            .join('\n'),
+    })),
+    ...strings.map((t) => ({ text: t })),
+  ];
+}
+
+const one = (text) => text.replace(/\s+/g, ' ').trim();
+// A line of code in a note: an import or export, a statement, or a whole call (`route(...),`, `.route(...)`).
+const CODE_LINE =
+  /^(?:import\s.*\sfrom\s['"]|import\s+['"]|export\s+(?:async\s|default\s|const\s|function\s|\{)|(?:const|let)\s+[\w${[][^=]*=|await\s|return\s|if\s*\()/;
+const CALL_LINE = /^\.?[A-Za-z_$][\w$]*(?:\.[\w$]+)*\(.*[;,{)]$/;
+// Inline `code` that is TypeScript to run: a call, an assignment, an arrow or an import.
+const CODE_SPAN = /[\w$)\]]\s*\(|[^=!<>]=[^=>]|=>|^import\s/;
+// SQL is checked by the live database check, not here.
+const SQL = /^(?:create|alter|grant|revoke|drop|insert|select|update|delete|using|with)\b/i;
+
+/** The code lines and the inline code spans of one file's notes. */
+async function taughtCode(rel) {
+  const found = [];
+
+  for (const { text, markdown } of await taughtTexts(rel)) {
+    const prose = [];
+    let fence = null;
+
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+
+      if (markdown && line.startsWith('```')) {
+        fence = fence === null ? line.slice(3) : null;
+        continue;
+      }
+
+      if (fence !== null) {
+        // A shell block is commands, not TypeScript; any other fenced block is code.
+        if (!/^(bash|sh|shell)?$/.test(fence) && line) {
+          found.push({ rel, kind: 'line', code: line });
+        }
+
+        continue;
+      }
+
+      if (!markdown && (CODE_LINE.test(line) || CALL_LINE.test(line)) && !SQL.test(line)) {
+        found.push({ rel, kind: 'line', code: line.replace(/\s+\/\/\s.*$/, '') });
+      } else {
+        prose.push(line.replace(/^\/\/\s?/, ''));
+      }
+    }
+
+    for (const m of prose.join(' ').matchAll(/`([^`]+)`/g)) {
+      const code = m[1].trim();
+
+      if (CODE_SPAN.test(code) && !SQL.test(code)) {
+        found.push({ rel, kind: 'span', code });
+      }
+    }
+  }
+
+  return found;
+}
+
+/** README.md, eslint.config.js and the template's own source files. */
+function noteFiles() {
+  const files = [...NOTE_SOURCES];
+  const walk = (rel) => {
+    for (const entry of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+      const child = `${rel}/${entry.name}`;
+
+      if (entry.isDirectory() && !NOT_NOTES.has(child)) {
+        walk(child);
+      } else if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name)) {
+        files.push(child);
+      }
+    }
+  };
+  walk('src');
+
+  return files;
+}
+
+/*
+ * Every piece of code the notes teach, with where it runs. `pieces` are written in the note exactly so (spaces
+ * aside); the copy places them, in order, in a function of that kind:
+ *   component  a React component           browser  an async function in browser code
+ *   route      a route module of its own (the pieces are the whole module, a default component added)
+ *   hono       a Hono handler (`c`)         server   an async function in server code
+ *   server-module  a module of its own under src/server
+ *   routes     an entry of a RouteConfig list
+ * `params` are the function's parameters, `head` and `tail` the check's own lines around the pieces.
+ */
+const NOTE_CODE = [
+  {
+    note: 'src/lib/neon-auth.ts',
+    where: 'component',
+    pieces: ['const { data, isPending, error } = useAuthSession();'],
+    tail: 'return <p>{String(isPending)} {data?.user.id} {data?.user.email} {data?.user.name} {error?.message}</p>;',
+  },
+  {
+    note: 'src/lib/neon-auth.ts',
+    where: 'browser',
+    params: 'email: string, password: string, name: string',
+    pieces: [
+      'const auth = await getAuthClient();',
+      'await auth.signUp.email({ email, password, name });',
+      'await auth.signIn.email({ email, password });',
+      'await auth.signOut();',
+    ],
+  },
+  {
+    note: 'src/lib/neon-auth.ts',
+    where: 'browser',
+    pieces: ['const token = await getAuthToken();'],
+    tail: 'return token;',
+  },
+  {
+    note: 'src/lib/neon-data.ts',
+    where: 'browser',
+    params: 'title: string, id: string',
+    pieces: [
+      'const db = createDataClient();',
+      "const { data, error } = await db.from('todos').select('*').order('created_at', { ascending: false });",
+      "await db.from('todos').insert({ title }).select().single();",
+      "await db.from('todos').update({ done: true }).eq('id', id);",
+      "await db.from('todos').delete().eq('id', id);",
+    ],
+    tail: 'return { data, error };',
+  },
+  {
+    note: 'src/lib/neon-data.ts',
+    where: 'route',
+    pieces: [
+      `import { env } from 'cloudflare:workers';
+import { neon } from '@neondatabase/serverless';
+import { requireEnv } from '@/server/env';
+
+export async function loader() {
+  const sql = neon(requireEnv(env, 'DATABASE_URL'));
+  return { tasks: await sql\`select id, title from tasks order by title limit 50\` };
+}`,
+    ],
+  },
+  {
+    note: 'src/server/routes/example-server-write.ts',
+    where: 'hono',
+    pieces: [
+      'const user = await verifyAuthToken(c.req.raw);',
+      "if (!user) return c.json({ error: 'Sign in first.' }, 401);",
+    ],
+    tail: 'return c.json({ id: user.sub });',
+  },
+  {
+    note: 'src/server/routes/example-server-write.ts',
+    where: 'server',
+    params: 'url: string, id: string',
+    pieces: [
+      'const sql = neon(url)',
+      'const rows = await sql`select * from tasks where id = ${id}`;',
+    ],
+    tail: 'return rows;',
+  },
+  {
+    note: 'src/server/routes/example-server-write.ts',
+    where: 'server',
+    pieces: ['z.email()', 'z.uuid()', 'z.url()'],
+    joiner: ', ',
+    wrap: (code) => `return [${code}];`,
+  },
+  {
+    note: 'src/server/env.ts',
+    where: 'server-module',
+    head: "import { requireEnv } from './env';",
+    pieces: [
+      "import { env } from 'cloudflare:workers';",
+      "const url = requireEnv(env, 'DATABASE_URL');",
+    ],
+    tail: 'export { url };',
+  },
+  {
+    note: 'src/lib/api.ts',
+    where: 'browser',
+    pieces: ['const res = await api.api.health.$get();', 'const data = await res.json();'],
+    tail: 'return data;',
+  },
+  {
+    note: 'src/lib/fetch.ts',
+    where: 'browser',
+    params: 'body: string',
+    pieces: ["const res = await loggedFetch('/api/todos', { method: 'POST', body });"],
+    tail: 'return res;',
+  },
+  {
+    note: 'src/routes.ts',
+    where: 'routes',
+    pieces: ["route('about', 'routes/about.tsx'),"],
+  },
+  {
+    note: 'src/server/index.ts',
+    where: 'server',
+    head: 'const todos = new Hono();',
+    pieces: ['new Hono()', ".route('/api/todos', todos)"],
+    joiner: '\n    ',
+    wrap: (code) => `return ${code};`,
+  },
+  {
+    note: 'eslint.config.js',
+    where: 'server',
+    params: 'request: Request',
+    pieces: ['const user = await verifyAuthToken(request)'],
+    tail: 'return user;',
+  },
+];
+
+/** Code in the notes that is not compiled here, each with its reason. */
+const NOT_TYPESCRIPT = {
+  'auth.user_id()': 'SQL: the database function a policy reads',
+  'uuid default gen_random_uuid()': 'SQL: a column definition',
+  'z.string().email()': 'named as the deprecated form not to write',
+  'if (!user)': 'a shape the await rule refuses, quoted in its comment',
+  'Boolean(...)': 'a shape the await rule refuses, quoted in its comment',
+  '.then(...)': 'a call shape, its arguments left out',
+  'json()': "named as Remix 2's helper that doesn't exist here",
+  'app.get(...)': 'a call shape, its arguments left out',
+  'auth.signIn.email(...)':
+    'a call shape, its arguments left out (the whole call is in src/lib/neon-auth.ts)',
+  'auth.signUp.email(...)':
+    'a call shape, its arguments left out (the whole call is in src/lib/neon-auth.ts)',
+  ".route('/api/<name>', module)":
+    'a call shape with a placeholder (the whole call is in src/server/index.ts)',
+  'import type { AppType }': "src/lib/api.ts's own import, named in a comment",
+  'not_found_handling = "none"': "wrangler.toml's setting, not TypeScript",
+};
+
+function placeNoteCode() {
+  const files = {
+    browser: [
+      "import { getAuthClient, getAuthToken, useAuthSession } from '@/lib/neon-auth';",
+      "import { createDataClient } from '@/lib/neon-data';",
+      "import { api } from '@/lib/api';",
+      "import { loggedFetch } from '@/lib/fetch';",
+      "import { type RouteConfig, route } from '@react-router/dev/routes';",
+      '',
+    ],
+    server: [
+      "import { Hono } from 'hono';",
+      "import { neon } from '@neondatabase/serverless';",
+      "import { z } from 'zod';",
+      "import { verifyAuthToken } from './neon-auth/require-user';",
+      '',
+    ],
+  };
+  const own = {};
+  const routes = [];
+
+  NOTE_CODE.forEach((entry, i) => {
+    const joined = entry.pieces
+      .map((p) => (entry.joiner || /[;{},]$/.test(p) ? p : `${p};`))
+      .join(entry.joiner ?? '\n');
+    const body = [entry.head, entry.wrap ? entry.wrap(joined) : joined, entry.tail]
+      .filter(Boolean)
+      .join('\n');
+    const params = entry.params ?? '';
+
+    switch (entry.where) {
+      case 'component':
+        files.browser.push(`export function Note${i}() {\n${body}\n}\n`);
+        break;
+      case 'browser':
+        files.browser.push(`export async function note${i}(${params}) {\n${body}\n}\n`);
+        break;
+      case 'routes':
+        files.browser.push(`export const note${i} = [\n${body}\n] satisfies RouteConfig;\n`);
+        break;
+      case 'route':
+        own[`src/routes/check-note-${i}.tsx`] =
+          `${body}\n\nexport default function CheckNote${i}() {\n  return <p>Check note ${i}</p>;\n}\n`;
+        routes.push(`  route('check-note-${i}', 'routes/check-note-${i}.tsx'),`);
+        break;
+      case 'hono':
+        files.server.push(
+          `export const note${i} = new Hono().post('/', async (c) => {\n${body}\n});\n`,
+        );
+        break;
+      case 'server':
+        files.server.push(`export async function note${i}(${params}) {\n${body}\n}\n`);
+        break;
+      case 'server-module':
+        own[`src/server/check-note-${i}.ts`] = `${body}\n`;
+        break;
+      default:
+        throw new Error(`NOTE_CODE ${i}: unknown place ${entry.where}`);
+    }
+  });
+
+  return {
+    ...own,
+    'src/features/check-notes.tsx': files.browser.join('\n'),
+    'src/server/check-notes.ts': files.server.join('\n'),
+    'src/routes/check-notes.tsx': `import * as notes from '@/features/check-notes';\n\nexport default function CheckNotes() {\n  return <p>{Object.keys(notes).length} notes</p>;\n}\n`,
+    'src/routes.ts': `import { type RouteConfig, index, route } from '@react-router/dev/routes';\n\nexport default [\n  index('routes/home.tsx'),\n  route('check-notes', 'routes/check-notes.tsx'),\n${routes.join('\n')}\n] satisfies RouteConfig;\n`,
+  };
+}
+
+describe('the code the notes teach', () => {
+  test('every NOTE_CODE piece is written in its note as it is compiled', async () => {
+    const missing = [];
+
+    for (const entry of NOTE_CODE) {
+      const said = one((await taughtTexts(entry.note)).map((t) => t.text).join('\n'));
+
+      for (const piece of entry.pieces) {
+        if (!said.includes(one(piece))) {
+          missing.push(`${entry.note}: ${piece}`);
+        }
+      }
+    }
+
+    assert.deepEqual(
+      missing,
+      [],
+      'NOTE_CODE pieces a note no longer says (fix the note or the entry)',
+    );
+  });
+
+  test('every piece of code in the notes is compiled by the check, or listed as not TypeScript', async () => {
+    const compiled = NOTE_CODE.flatMap((entry) => entry.pieces.map(one));
+    const unchecked = [];
+
+    for (const rel of noteFiles()) {
+      for (const { kind, code } of await taughtCode(rel)) {
+        const text = one(code);
+
+        if (!(text in NOT_TYPESCRIPT) && !compiled.some((piece) => piece.includes(text))) {
+          unchecked.push(`${rel} (${kind}): ${text}`);
+        }
+      }
+    }
+
+    assert.deepEqual(
+      unchecked,
+      [],
+      'code in a note that no NOTE_CODE entry compiles: add the entry (or fix the code)',
+    );
+  });
+});
+
+describe('the code the notes teach, as written', () => {
+  let dir;
+
+  before(() => {
+    dir = makeCopy('webdiy-notes-');
+
+    for (const [file, source] of Object.entries(placeNoteCode())) {
+      fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      fs.writeFileSync(path.join(dir, file), source);
+    }
+
+    // The server's pieces are in the Worker the build makes.
+    const serverIndex = path.join(dir, 'src', 'server', 'index.ts');
+    fs.writeFileSync(
+      serverIndex,
+      `import './check-notes';\n${fs.readFileSync(serverIndex, 'utf8')}`,
+    );
+  });
+
+  after(() => {
+    if (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('type-checks and builds: pnpm run build, step by step', () => {
+    const { scripts } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    assert.equal(scripts.build, 'react-router typegen && tsc -b && react-router build');
+
+    for (const args of [
+      ['node_modules/@react-router/dev/bin.cjs', 'typegen'],
+      ['node_modules/typescript/bin/tsc', '-b'],
+      ['node_modules/@react-router/dev/bin.cjs', 'build'],
+    ]) {
+      const run = spawnSync(process.execPath, args, {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, FORCE_COLOR: '0' },
+      });
+      assert.equal(run.status, 0, `${args.join(' ')} failed:\n${run.stdout}\n${run.stderr}`);
+    }
+  });
+
+  test("a loader's server code stays out of the browser's files", () => {
+    const clientDir = path.join(dir, 'dist', 'client');
+    assert.ok(fs.existsSync(clientDir), 'the build wrote dist/client');
+    const holding = fs
+      .readdirSync(clientDir, { recursive: true })
+      .filter((rel) => rel.endsWith('.js'))
+      .filter((rel) => {
+        const code = fs.readFileSync(path.join(clientDir, rel), 'utf8');
+        return (
+          code.includes('is not set in the worker environment') ||
+          code.includes('cloudflare:workers')
+        );
+      });
+    assert.deepEqual(holding, [], 'a browser file holds requireEnv or cloudflare:workers');
+  });
+
+  // A loader's binding read where its module loads would throw as the server build loads, taking every page down
+  // while the binding is unset (before the database is turned on).
+  test('with no bindings set, every other page still renders', async () => {
+    stubCloudflareWorkers();
+    const { default: worker } = await import(
+      pathToFileURL(path.join(dir, 'dist', 'server', 'index.js')).href
+    );
+
+    for (const p of ['/', '/check-notes']) {
+      const res = await logged(async () => {
+        const answer = await worker.fetch(
+          new Request(`https://check.example${p}`, {
+            headers: { 'user-agent': BOT, accept: 'text/html' },
+          }),
+          ASSETS_ENV,
+          CTX,
+        );
+        assert.equal(
+          answer.status,
+          200,
+          `${p} answered ${answer.status}: ${(await answer.text()).slice(0, 500)}`,
+        );
+      });
+      assert.deepEqual(res, [], `${p} logged an error`);
+    }
+  });
+
+  test('lints clean', () => {
+    const files = Object.keys(placeNoteCode()).filter((f) => f !== 'src/routes.ts');
+    const run = spawnSync(
+      process.execPath,
+      ['node_modules/eslint/bin/eslint.js', '--format', 'json', ...files],
+      { cwd: dir, encoding: 'utf8', env: { ...process.env, FORCE_COLOR: '0' } },
+    );
+    const found = JSON.parse(run.stdout).flatMap((r) =>
+      r.messages.map(
+        (m) => `${path.relative(dir, r.filePath)}:${m.line} ${m.ruleId}: ${m.message}`,
+      ),
+    );
+    assert.deepEqual(found, []);
+  });
+});
