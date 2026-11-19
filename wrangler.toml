@@ -1,0 +1,20 @@
+#:schema node_modules/wrangler/config-schema.json
+# Rename `name` to something project-specific before the first deploy —
+# this becomes the workers.dev subdomain (`<name>.<your-acct>.workers.dev`).
+name = "webdiy-template-fullstack-ssr"
+main = "src/server/index.ts"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The build writes the browser's files to `./dist/client` and the Worker to
+# `./dist/server`. A request for a file in dist/client is answered from it;
+# every other request runs the Worker: /api/* reaches the Hono routes and
+# every page is rendered by React Router, which answers 404 for a path no
+# route matches.
+#
+# Keep `not_found_handling = "none"`. "single-page-application" would answer
+# every page load but "/" with a file that doesn't exist in this build.
+[assets]
+directory = "./dist/client"
+binding = "ASSETS"
+not_found_handling = "none"
