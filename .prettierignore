@@ -1,0 +1,3 @@
+# Third-party code kept verbatim (see its README), and the lockfile pnpm writes.
+src/server/neon-auth/vendor
+pnpm-lock.yaml

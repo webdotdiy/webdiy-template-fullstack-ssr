@@ -1,5 +1,12 @@
 import { useState } from 'react';
-import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router';
+import {
+  isRouteErrorResponse,
+  Links,
+  Meta,
+  Outlet,
+  Scripts,
+  ScrollRestoration,
+} from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Route } from './+types/root';
 import stylesheet from './index.css?url';
@@ -55,7 +62,8 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
 
   if (isRouteErrorResponse(error)) {
     title = error.status === 404 ? 'Page not found' : `Error ${error.status}`;
-    details = error.status === 404 ? 'The page you asked for does not exist.' : error.statusText || details;
+    details =
+      error.status === 404 ? 'The page you asked for does not exist.' : error.statusText || details;
   } else if (import.meta.env.DEV && error instanceof Error) {
     details = error.message;
     stack = error.stack;

@@ -33,7 +33,9 @@ export async function verifyAuthToken(request: Request): Promise<AuthenticatedUs
 
     const { payload } = await jwtVerify(header.slice('Bearer '.length), jwks);
 
-    return typeof payload.sub === 'string' && payload.sub.length > 0 ? (payload as AuthenticatedUser) : null;
+    return typeof payload.sub === 'string' && payload.sub.length > 0
+      ? (payload as AuthenticatedUser)
+      : null;
   } catch {
     return null;
   }

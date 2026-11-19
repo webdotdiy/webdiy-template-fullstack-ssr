@@ -39,7 +39,9 @@ export async function handleNeonAuth(request: Request, env: NeonAuthBindings): P
   }
 
   const { pathname } = new URL(request.url);
-  const path = pathname.startsWith(AUTH_MOUNT_PREFIX) ? pathname.slice(AUTH_MOUNT_PREFIX.length) : '';
+  const path = pathname.startsWith(AUTH_MOUNT_PREFIX)
+    ? pathname.slice(AUTH_MOUNT_PREFIX.length)
+    : '';
 
   if (!path) {
     return Response.json({ error: 'Missing auth path.' }, { status: 404 });
