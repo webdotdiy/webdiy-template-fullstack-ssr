@@ -35,8 +35,11 @@ import { useSyncExternalStore } from 'react';
  *     const token = await getAuthToken(); // null when signed out
  *     // `Authorization: Bearer <token>`; createDataClient() in
  *     // src/lib/neon-data.ts attaches it already. To a protected /api/*
- *     // route, send it with the typed client (src/lib/api.ts):
- *     const res = await api.api.health.$get({}, { headers: { Authorization: `Bearer ${token}` } });
+ *     // route, such as src/server/routes/example-server-write.ts once it is
+ *     // mounted at /api/tasks, send it with the typed client (src/lib/api.ts),
+ *     // and send nothing when signed out:
+ *     if (!token) return; // signed out: show the sign-in form instead
+ *     const res = await api.api.tasks.$post({ json: { projectId, title } }, { headers: { Authorization: `Bearer ${token}` } });
  *
  * Never call getAuthClient() or getAuthToken() in a loader, an action, a
  * component's render or server code: they throw there. A loader or action has

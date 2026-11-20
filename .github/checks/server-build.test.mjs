@@ -192,6 +192,11 @@ export default function CheckThrows() {
 const HEALTH_ROUTE = ".get('/api/health', (c) => c.json({ ok: true }))";
 const THROWING_API_ROUTE = `${HEALTH_ROUTE}\n  .get('/api/check-throws', () => {\n    throw new Error('check api failure');\n  })`;
 
+// The template's protected route example, mounted in the notes' copy where neon-auth.ts's notes say it is.
+const PROTECTED_ROUTE_FILE = 'src/server/routes/example-server-write.ts';
+const PROTECTED_PATH = '/api/tasks';
+const PROTECTED_MOUNT = `${HEALTH_ROUTE}\n  .route('${PROTECTED_PATH}', exampleServerWrite)`;
+
 const ROUTES_TS = `import { type RouteConfig, index, route } from '@react-router/dev/routes';
 
 export default [
@@ -1208,9 +1213,11 @@ const NOTE_CODE = [
   {
     note: 'src/lib/neon-auth.ts',
     where: 'browser',
+    params: 'projectId: string, title: string',
     pieces: [
       'const token = await getAuthToken();',
-      'const res = await api.api.health.$get({}, { headers: { Authorization: `Bearer ${token}` } });',
+      'if (!token) return;',
+      'const res = await api.api.tasks.$post({ json: { projectId, title } }, { headers: { Authorization: `Bearer ${token}` } });',
     ],
     tail: 'return res;',
   },
@@ -1403,30 +1410,54 @@ function placeNoteCode() {
 }
 
 describe('the code the notes teach', () => {
-  // A type-check can't tell an option the client ignores from one it sends: run the note's line itself.
-  test('the typed client sends the token the way the notes show it', async () => {
+  // A type-check can't tell an option the client ignores from one it sends: run the note's lines themselves, signed
+  // in and signed out. Every note that sends `Bearer ${token}` is run, so none can send `Bearer null`.
+  test('the typed client sends the token the way the notes show it, to the protected route, and nothing when signed out', async () => {
     const { hc } = await import('hono/client');
-    const piece = NOTE_CODE.flatMap((entry) => entry.pieces).find((p) =>
-      p.includes('Bearer ${token}'),
+    const sending = NOTE_CODE.filter((entry) =>
+      entry.pieces.some((p) => p.includes('Bearer ${token}')),
     );
-    assert.ok(piece, "neon-auth.ts's notes show the token sent with the typed client");
-    const sent = [];
-    const api = hc('http://check.example/', {
-      fetch: async (input, init) => {
-        const headers = new Headers(
-          init?.headers ?? (input instanceof Request ? input.headers : undefined),
-        );
-        sent.push(headers.get('authorization'));
-        return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
-      },
-    });
+    assert.ok(sending.length > 0, "neon-auth.ts's notes show the token sent with the typed client");
     const AsyncFunction = (async () => {}).constructor;
-    const res = await new AsyncFunction('api', 'token', `${piece}\nreturn res;`)(
-      api,
-      'check-token',
-    );
-    assert.equal(res.status, 200);
-    assert.deepEqual(sent, ['Bearer check-token']);
+
+    for (const entry of sending) {
+      const [first, ...rest] = entry.pieces;
+      assert.equal(
+        first,
+        'const token = await getAuthToken();',
+        'the token comes from getAuthToken()',
+      );
+      const sent = [];
+      const api = hc('http://check.example/', {
+        fetch: async (input, init) => {
+          const request = new Request(input, init);
+          sent.push(
+            `${request.method} ${new URL(request.url).pathname} ${request.headers.get('authorization')}`,
+          );
+          return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
+        },
+      });
+      const run = (token) =>
+        new AsyncFunction(
+          'api',
+          'token',
+          'projectId',
+          'title',
+          `${rest.join('\n')}\n${entry.tail ?? ''}`,
+        )(api, token, '00000000-0000-4000-8000-000000000000', 'A title');
+
+      const res = await run('check-token');
+      assert.equal(res.status, 200);
+      assert.deepEqual(
+        sent,
+        [`POST ${PROTECTED_PATH} Bearer check-token`],
+        'signed in: the token, to the protected route',
+      );
+
+      sent.length = 0;
+      await run(null);
+      assert.deepEqual(sent, [], 'signed out: nothing sent (no `Bearer null`)');
+    }
   });
 
   test('every NOTE_CODE piece is written in its note as it is compiled', async () => {
@@ -1482,11 +1513,18 @@ describe('the code the notes teach, as written', () => {
       fs.writeFileSync(path.join(dir, file), source);
     }
 
-    // The server's pieces are in the Worker the build makes.
+    // The server's pieces are in the Worker the build makes, and the protected route example is mounted where
+    // neon-auth.ts's notes say it is, so the typed client's call to it type-checks.
     const serverIndex = path.join(dir, 'src', 'server', 'index.ts');
+    const server = fs.readFileSync(serverIndex, 'utf8');
+    assert.equal(
+      server.split(HEALTH_ROUTE).length,
+      2,
+      'src/server/index.ts chains the health route once',
+    );
     fs.writeFileSync(
       serverIndex,
-      `import './check-notes';\n${fs.readFileSync(serverIndex, 'utf8')}`,
+      `import './check-notes';\nimport exampleServerWrite from './routes/example-server-write';\n${server.replace(HEALTH_ROUTE, PROTECTED_MOUNT)}`,
     );
   });
 
@@ -1555,6 +1593,37 @@ describe('the code the notes teach, as written', () => {
       });
       assert.deepEqual(res, [], `${p} logged an error`);
     }
+  });
+
+  // The route the token example calls is a protected one: without a token it answers 401.
+  test('the route the token example calls refuses a caller with no token', async () => {
+    const note = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'neon-auth.ts'), 'utf8');
+    assert.ok(
+      note.includes(`mounted at ${PROTECTED_PATH}`),
+      `neon-auth.ts's notes name ${PROTECTED_PATH}`,
+    );
+    assert.ok(
+      note.includes(PROTECTED_ROUTE_FILE),
+      `neon-auth.ts's notes name ${PROTECTED_ROUTE_FILE}`,
+    );
+    stubCloudflareWorkers();
+    const { default: worker } = await import(
+      pathToFileURL(path.join(dir, 'dist', 'server', 'index.js')).href
+    );
+    const res = await worker.fetch(
+      new Request(`https://check.example${PROTECTED_PATH}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId: '00000000-0000-4000-8000-000000000000',
+          title: 'A title',
+        }),
+      }),
+      ASSETS_ENV,
+      CTX,
+    );
+    assert.equal(res.status, 401);
+    assert.deepEqual(await res.json(), { error: 'Sign in first.' });
   });
 
   test('lints clean', () => {
