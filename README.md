@@ -67,3 +67,5 @@ Outside WebDIY, `.env.example` lists every name: put the public addresses in `.e
 ## Licence
 
 The starter code this project began from is under the MIT licence ([LICENSE](LICENSE)). The vendored auth proxy in [src/server/neon-auth/vendor/](src/server/neon-auth/vendor) is from Neon's `neon-js` repository, under the Apache License 2.0 ([its licence](src/server/neon-auth/vendor/LICENSE)).
+
+The UI components in src/components/ui/ are adapted from shadcn/ui (MIT, Copyright (c) 2023 shadcn).

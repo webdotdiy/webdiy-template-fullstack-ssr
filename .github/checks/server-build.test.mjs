@@ -997,6 +997,12 @@ describe('the licences', () => {
       readme.includes(`(${VENDOR}/LICENSE)`),
       "the README names the vendored proxy's licence",
     );
+    assert.ok(
+      readme.includes(
+        'The UI components in src/components/ui/ are adapted from shadcn/ui (MIT, Copyright (c) 2023 shadcn).',
+      ),
+      'the README credits shadcn/ui for the UI components',
+    );
   });
 
   test("the vendored proxy carries neon-js's licence, unchanged, from the commit its README names", () => {
