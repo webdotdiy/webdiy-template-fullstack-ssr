@@ -16,8 +16,8 @@
 // what the server rendered it with, so the server's HydrateFallback HTML is never left on the page.
 // It also checks what the server does with errors (an /api/* route's error answers JSON, a page's error the
 // app's own error page, a server build that can't load is thrown on, an unknown path is not logged), the lint
-// rules against React Router 7 and Remix habits and against an auth call left without `await`, `requireEnv` and
-// the logging fetch.
+// rules against React Router 7 and Remix habits and against an auth call left without `await` (which
+// `pnpm run check` runs), `requireEnv` and the logging fetch.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -1516,5 +1516,46 @@ describe('the code the notes teach, as written', () => {
       ),
     );
     assert.deepEqual(found, []);
+  });
+
+  // `pnpm run check` is what a model runs after a change: it type-checks and lints, so a sign-in check left
+  // without `await` (which TypeScript lets through) fails it.
+  test('pnpm run check type-checks and lints: it passes here, and a guard without await fails it', () => {
+    const { scripts } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const check = () =>
+      spawnSync('/bin/sh', ['-c', scripts.check], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          FORCE_COLOR: '0',
+          PATH: `${path.join(dir, 'node_modules', '.bin')}${path.delimiter}${process.env.PATH}`,
+        },
+      });
+
+    const clean = check();
+    assert.equal(clean.status, 0, `check failed:\n${clean.stdout}\n${clean.stderr}`);
+
+    const guard = path.join(dir, 'src', 'server', 'check-unawaited.ts');
+    fs.writeFileSync(
+      guard,
+      `import { verifyAuthToken } from './neon-auth/require-user';
+
+export function guard(request: Request) {
+  const user = verifyAuthToken(request);
+  return !user ? new Response('Sign in first.', { status: 401 }) : null;
+}
+`,
+    );
+
+    try {
+      const run = check();
+      const out = `${run.stdout}\n${run.stderr}`;
+      assert.notEqual(run.status, 0, `check passed a guard without await:\n${out}`);
+      assert.doesNotMatch(out, /error TS\d+/, 'TypeScript, not lint, refused it');
+      assert.match(out, /check-unawaited\.ts[\s\S]*write `await` before the call/);
+    } finally {
+      fs.rmSync(guard);
+    }
   });
 });

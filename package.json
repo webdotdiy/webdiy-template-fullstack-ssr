@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "react-router typegen && tsc -b && react-router build",
-    "check": "react-router typegen && tsc -b",
+    "check": "react-router typegen && tsc -b && eslint .",
     "typegen": "react-router typegen",
     "preview": "vite preview",
     "lint": "eslint .",

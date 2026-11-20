@@ -18,7 +18,7 @@ Every page is rendered on the server and then hydrated in the browser, so crawle
 pnpm install
 pnpm dev         # vite: the dev server, pages and /api/* together
 pnpm build       # react-router typegen, tsc -b, react-router build -> dist/client + dist/server
-pnpm check       # react-router typegen, tsc -b
+pnpm check       # react-router typegen, tsc -b, eslint
 pnpm lint        # eslint
 pnpm deploy      # build, then wrangler deploy
 pnpm cf-typegen  # wrangler types: regenerate the binding types
