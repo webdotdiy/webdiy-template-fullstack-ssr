@@ -1064,6 +1064,136 @@ describe('the licences', () => {
   });
 });
 
+// What git saves of a project. WebDIY saves a project's files through git and its .gitignore, so a line that
+// ignores a name at any depth (a line without a leading or middle `/`) also leaves out a person's source folder of
+// that name, src/features/logs/ for `logs`, and nothing says so.
+describe('what .gitignore leaves out', () => {
+  const lines = fs
+    .readFileSync(path.join(ROOT, '.gitignore'), 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  // Names only a tool makes, ignored wherever they are.
+  const ANY_DEPTH = new Set([
+    'node_modules',
+    '.wrangler',
+    '.dev.vars',
+    'worker-configuration.d.ts',
+    '.idea',
+    '.DS_Store',
+    '.react-router/',
+  ]);
+  // Folders a person may give their source, at the depths a project has them.
+  const SOURCE = [
+    'src/features/logs/index.ts',
+    'src/routes/logs/route.tsx',
+    'src/features/dist/index.ts',
+    'src/components/dist-ssr/index.tsx',
+    'src/lib/build/index.ts',
+    'src/server/out/index.ts',
+    'src/coverage/index.ts',
+    'src/cache/index.ts',
+    'src/tmp/index.ts',
+    'public/logs/index.html',
+  ];
+  // What a build, a check or a tool writes at the root.
+  const ROOT_OUTPUT = [
+    'dist/client/index.html',
+    'dist/server/index.js',
+    'dist-ssr/index.js',
+    'logs/dev.txt',
+    'node_modules/a/index.js',
+    '.wrangler/state/v3/d1/db.sqlite',
+    '.react-router/types/+routes.ts',
+    '.dev.vars',
+    'worker-configuration.d.ts',
+    'tsconfig.app.tsbuildinfo',
+    'pnpm-debug.log',
+  ];
+
+  /** The files git would save in a folder holding `files` and the template's .gitignore. */
+  function saved(files) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'webdiy-gitignore-'));
+    try {
+      const git = (args) => {
+        const r = spawnSync('git', args, {
+          cwd: dir,
+          encoding: 'utf8',
+          env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
+        });
+        assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+
+        return r.stdout;
+      };
+      git(['init', '-q']);
+      for (const rel of files) {
+        fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        fs.writeFileSync(path.join(dir, rel), 'x\n');
+      }
+      // Last, so a `.gitignore` among the files is the template's own.
+      fs.copyFileSync(path.join(ROOT, '.gitignore'), path.join(dir, '.gitignore'));
+      git(['add', '-A']);
+
+      return new Set(git(['ls-files', '-z']).split('\0').filter(Boolean));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('a line that names a folder or file is anchored to the root, or names something only a tool makes', () => {
+    const anyDepth = lines.filter(
+      (line) => !/[*?[]/.test(line) && !line.replace(/\/$/, '').includes('/'),
+    );
+    assert.deepEqual(
+      anyDepth.filter((line) => !ANY_DEPTH.has(line)),
+      [],
+      'these lines leave out a source folder of the same name anywhere in a project: start them with /',
+    );
+  });
+
+  test('git keeps a source folder named like build output, and leaves out the build output at the root', () => {
+    const files = saved([...SOURCE, ...ROOT_OUTPUT]);
+    assert.deepEqual(
+      SOURCE.filter((rel) => !files.has(rel)),
+      [],
+      'source files git would not save',
+    );
+    assert.deepEqual(
+      ROOT_OUTPUT.filter((rel) => files.has(rel)),
+      [],
+      'build or tool output git would save',
+    );
+  });
+
+  test('git saves every file the template ships', () => {
+    // The template's files: what a build, a check or a tool writes beside them is left out of the walk.
+    const written = (name) =>
+      LEFT_OUT.has(name) || ANY_DEPTH.has(name) || /\.(tsbuildinfo|log)$/.test(name);
+    const shipped = [];
+    const walk = (rel) => {
+      for (const entry of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+        const child = rel ? `${rel}/${entry.name}` : entry.name;
+        if (written(entry.name)) {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          walk(child);
+        } else {
+          shipped.push(child);
+        }
+      }
+    };
+    walk('');
+    const files = saved(shipped);
+    assert.ok(shipped.includes('src/root.tsx'), 'the walk reads the template');
+    assert.deepEqual(
+      shipped.filter((rel) => !files.has(rel)),
+      [],
+      'files of the template git would not save',
+    );
+  });
+});
+
 describe('the usage notes', () => {
   // What a model building on the template would otherwise look for in node_modules or the vendor's docs: each
   // file's header must answer it.
