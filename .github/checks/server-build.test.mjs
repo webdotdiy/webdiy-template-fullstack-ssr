@@ -1064,9 +1064,9 @@ describe('the licences', () => {
   });
 });
 
-// What git saves of a project. WebDIY saves a project's files through git and its .gitignore, so a line that
-// ignores a name at any depth (a line without a leading or middle `/`) also leaves out a person's source folder of
-// that name, src/features/logs/ for `logs`, and nothing says so.
+// What git saves of a project. WebDIY saves a project's files by its .gitignore, whether a snapshot or git saves
+// them, so a line that ignores a name at any depth (a line without a leading or middle `/`) also leaves out a
+// person's source folder of that name, src/features/logs/ for `logs`, and nothing says so.
 describe('what .gitignore leaves out', () => {
   const lines = fs
     .readFileSync(path.join(ROOT, '.gitignore'), 'utf8')
@@ -1111,16 +1111,30 @@ describe('what .gitignore leaves out', () => {
     'pnpm-debug.log',
   ];
 
+  /**
+   * Runs git in `cwd` sealed from the caller's own git setup: no GIT_* variable passes through (a hook's GIT_DIR,
+   * GIT_WORK_TREE or GIT_INDEX_FILE would send the commands to the caller's repository or index), no global or
+   * system config, and no user-level excludes file (~/.config/git/ignore, read whatever the config says), so
+   * only the template's .gitignore decides what is left out.
+   */
+  function sealedGit(cwd, callerEnv = process.env) {
+    const env = Object.fromEntries(
+      Object.entries(callerEnv).filter(([key]) => !key.toUpperCase().startsWith('GIT_')),
+    );
+    env.GIT_CONFIG_GLOBAL = os.devNull;
+    env.GIT_CONFIG_NOSYSTEM = '1';
+
+    return (args) =>
+      spawnSync('git', ['-c', 'core.excludesFile=', ...args], { cwd, encoding: 'utf8', env });
+  }
+
   /** The files git would save in a folder holding `files` and the template's .gitignore. */
-  function saved(files) {
+  function saved(files, callerEnv = process.env) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'webdiy-gitignore-'));
     try {
+      const run = sealedGit(dir, callerEnv);
       const git = (args) => {
-        const r = spawnSync('git', args, {
-          cwd: dir,
-          encoding: 'utf8',
-          env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
-        });
+        const r = run(args);
         assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
 
         return r.stdout;
@@ -1138,6 +1152,44 @@ describe('what .gitignore leaves out', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  // What a build, a check or a tool writes beside the template's files.
+  const written = (name) =>
+    LEFT_OUT.has(name) || ANY_DEPTH.has(name) || /\.(tsbuildinfo|log)$/.test(name);
+
+  /**
+   * The files the template ships from `root`: in a checkout of its repository (`root` is the checkout's top), the
+   * files git tracks, so what a developer's editor or tools add there (.vscode/settings.json, .env.local) is not
+   * read as shipped; elsewhere (a `git archive` copy) every file in the folder. What a build, a check or a tool
+   * writes is left out either way.
+   */
+  function shippedFiles(root) {
+    const git = sealedGit(root);
+    const top = git(['rev-parse', '--show-toplevel']);
+    if (top.status === 0 && fs.realpathSync(top.stdout.trim()) === fs.realpathSync(root)) {
+      const tracked = git(['ls-files', '-z']);
+      assert.equal(tracked.status, 0, `git ls-files: ${tracked.stderr}`);
+
+      return tracked.stdout.split('\0').filter((rel) => rel && !rel.split('/').some(written));
+    }
+    const files = [];
+    const walk = (rel) => {
+      for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+        const child = rel ? `${rel}/${entry.name}` : entry.name;
+        if (written(entry.name)) {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          walk(child);
+        } else {
+          files.push(child);
+        }
+      }
+    };
+    walk('');
+
+    return files;
   }
 
   test('a line that names a folder or file is anchored to the root, or names something only a tool makes', () => {
@@ -1166,31 +1218,115 @@ describe('what .gitignore leaves out', () => {
   });
 
   test('git saves every file the template ships', () => {
-    // The template's files: what a build, a check or a tool writes beside them is left out of the walk.
-    const written = (name) =>
-      LEFT_OUT.has(name) || ANY_DEPTH.has(name) || /\.(tsbuildinfo|log)$/.test(name);
-    const shipped = [];
-    const walk = (rel) => {
-      for (const entry of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
-        const child = rel ? `${rel}/${entry.name}` : entry.name;
-        if (written(entry.name)) {
-          continue;
-        }
-        if (entry.isDirectory()) {
-          walk(child);
-        } else {
-          shipped.push(child);
-        }
-      }
-    };
-    walk('');
+    const shipped = shippedFiles(ROOT);
     const files = saved(shipped);
-    assert.ok(shipped.includes('src/root.tsx'), 'the walk reads the template');
+    assert.ok(shipped.includes('src/root.tsx'), "the list holds the template's files");
     assert.deepEqual(
       shipped.filter((rel) => !files.has(rel)),
       [],
       'files of the template git would not save',
     );
+  });
+
+  test("git reads only the template's .gitignore, never the caller's git setup", () => {
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'webdiy-caller-'));
+    try {
+      // The caller's user-level excludes files, leaving out src/.
+      for (const dir of ['xdg/git', 'home/.config/git']) {
+        fs.mkdirSync(path.join(outer, dir), { recursive: true });
+        fs.writeFileSync(path.join(outer, dir, 'ignore'), 'src/\n');
+      }
+      // The caller's global config, whose init template leaves out src/ in every new repository.
+      fs.mkdirSync(path.join(outer, 'template', 'info'), { recursive: true });
+      fs.writeFileSync(path.join(outer, 'template', 'info', 'exclude'), 'src/\n');
+      fs.mkdirSync(path.join(outer, 'home-config'));
+      fs.writeFileSync(
+        path.join(outer, 'home-config', '.gitconfig'),
+        `[init]\n\ttemplateDir = ${path.join(outer, 'template')}\n`,
+      );
+      // The caller's own repository, one file staged.
+      const other = path.join(outer, 'other');
+      fs.mkdirSync(other);
+      fs.writeFileSync(path.join(other, 'kept.txt'), 'kept\n');
+      const otherGit = sealedGit(other);
+      const staged = () => otherGit(['ls-files']).stdout.split('\n').filter(Boolean);
+      assert.equal(otherGit(['init', '-q']).status, 0);
+      assert.equal(otherGit(['add', 'kept.txt']).status, 0);
+      const { XDG_CONFIG_HOME: _xdg, ...withoutXdg } = process.env;
+      const callers = {
+        'a user-level excludes file ($XDG_CONFIG_HOME/git/ignore)': {
+          ...process.env,
+          XDG_CONFIG_HOME: path.join(outer, 'xdg'),
+        },
+        'a user-level excludes file (~/.config/git/ignore)': {
+          ...withoutXdg,
+          HOME: path.join(outer, 'home'),
+        },
+        'a global config (~/.gitconfig)': { ...withoutXdg, HOME: path.join(outer, 'home-config') },
+        'an inherited GIT_DIR': { ...process.env, GIT_DIR: path.join(other, '.git') },
+        'an inherited GIT_WORK_TREE': { ...process.env, GIT_WORK_TREE: other },
+        'an inherited absolute GIT_INDEX_FILE': {
+          ...process.env,
+          GIT_INDEX_FILE: path.join(other, '.git', 'index'),
+        },
+        'core.excludesFile set by GIT_CONFIG_COUNT': {
+          ...process.env,
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: 'core.excludesFile',
+          GIT_CONFIG_VALUE_0: path.join(outer, 'xdg', 'git', 'ignore'),
+        },
+      };
+      for (const [caller, env] of Object.entries(callers)) {
+        assert.deepEqual(
+          [...saved(['src/root.tsx'], env)].sort(),
+          ['.gitignore', 'src/root.tsx'],
+          `with ${caller}, git saves what the template's .gitignore says`,
+        );
+        assert.deepEqual(
+          staged(),
+          ['kept.txt'],
+          `with ${caller}, the caller's repository is untouched`,
+        );
+      }
+    } finally {
+      fs.rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  test('the files the template ships are what git tracks in a checkout, and every file in a copy', () => {
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'webdiy-shipped-'));
+    try {
+      const make = (dir, files) => {
+        for (const rel of files) {
+          fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+          fs.writeFileSync(path.join(dir, rel), 'x\n');
+        }
+      };
+      // A developer's checkout: the template's files and the repository's own .github tracked, then what an
+      // editor and the developer add.
+      const checkout = path.join(outer, 'checkout');
+      make(checkout, ['src/root.tsx', 'README.md', '.github/checks/a.test.mjs']);
+      const git = sealedGit(checkout);
+      assert.equal(git(['init', '-q']).status, 0);
+      assert.equal(git(['add', '-A']).status, 0);
+      make(checkout, ['.vscode/settings.json', '.env.local', 'node_modules/a/index.js']);
+      assert.deepEqual(shippedFiles(checkout).sort(), ['README.md', 'src/root.tsx']);
+      // A copy outside any checkout (a `git archive` of the template): every file but what a tool writes.
+      const copy = path.join(outer, 'copy');
+      make(copy, [
+        'src/root.tsx',
+        'notes.txt',
+        'node_modules/a/index.js',
+        'dist/client/index.html',
+      ]);
+      assert.deepEqual(shippedFiles(copy).sort(), ['notes.txt', 'src/root.tsx']);
+      // A copy in a folder of another checkout, not at its top: every file of the copy too.
+      const nested = path.join(checkout, 'copy');
+      make(nested, ['src/root.tsx', 'notes.txt']);
+      assert.deepEqual(shippedFiles(nested).sort(), ['notes.txt', 'src/root.tsx']);
+    } finally {
+      fs.rmSync(outer, { recursive: true, force: true });
+    }
   });
 });
 
