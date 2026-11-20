@@ -1,3 +1,4 @@
+// Changed from neon-js 186ac6b: its import paths only (README.md in this folder lists the changes).
 import type { VanillaBetterAuthClient } from './shims';
 import type { API_ENDPOINTS } from './endpoints';
 import type {

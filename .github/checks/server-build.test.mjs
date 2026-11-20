@@ -21,6 +21,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -970,6 +971,90 @@ describe('the server and browser helpers', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+// The template's own licence, and the licence of the vendored auth proxy (Apache-2.0 asks whoever passes the code on
+// to give its licence with it, and to mark the files they changed).
+describe('the licences', () => {
+  const VENDOR = 'src/server/neon-auth/vendor';
+  const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  const sha256 = (text) => createHash('sha256').update(text).digest('hex');
+  // neon-js's LICENSE at the vendored commit (the same bytes as @neondatabase/auth 0.4.2-beta's LICENSE).
+  const APACHE_SHA256 = '360ccd31d8459144450ed98c208e0f2fd5ee41960b453fba1648b2f1d768caa2';
+  // The MIT text, its spaces and line breaks collapsed (SPDX's text, its placeholders filled).
+  const MIT_SHA256 = '3b602d57ed31a26d66f191b89f4ea287b342c3b4338333902ab19131e9400dc8';
+  const NOTICE =
+    /^\/\/ Changed from neon-js ([0-9a-f]{7}): its import paths only \(README\.md in this folder lists the changes\)\.\n/;
+
+  test('the repository is MIT, copyright Lumeio, Inc., and the README names both licences', () => {
+    const mit = read('LICENSE');
+    assert.match(mit, /^MIT License\n\nCopyright \(c\) 2026 Lumeio, Inc\.\n/);
+    assert.equal(sha256(mit.replace(/\s+/g, ' ').trim()), MIT_SHA256, 'LICENSE is the MIT text');
+    const readme = read('README.md');
+    assert.ok(readme.includes('[LICENSE](LICENSE)'), 'the README names LICENSE');
+    assert.ok(
+      readme.includes(`(${VENDOR}/LICENSE)`),
+      "the README names the vendored proxy's licence",
+    );
+  });
+
+  test("the vendored proxy carries neon-js's licence, unchanged, from the commit its README names", () => {
+    const text = read(`${VENDOR}/LICENSE`);
+    const line = text.indexOf('\n---');
+    assert.ok(line > 0, 'LICENSE has its header above a line');
+    const header = text.slice(0, line);
+    const body = text.slice(text.indexOf('\n', line + 1) + 1);
+    assert.equal(
+      sha256(body),
+      APACHE_SHA256,
+      "the text below the line is neon-js's LICENSE, byte for byte",
+    );
+    const commit = (header.match(/neondatabase\/neon-js\/blob\/([0-9a-f]{40})\/LICENSE/) ?? [])[1];
+    assert.ok(commit, 'the header names the file it was copied from');
+    assert.match(header, /copied on \d{4}-\d{2}-\d{2}/, 'the header says when');
+    const readme = read(`${VENDOR}/README.md`);
+    assert.ok(readme.includes('[LICENSE](LICENSE)'), 'the vendor README names LICENSE');
+    assert.ok(
+      readme.includes(`at commit \`${commit.slice(0, 7)}\``),
+      'the vendor README names the same commit',
+    );
+  });
+
+  test('every changed vendored file says so, and the vendor README lists every file as changed, as upstream or own', () => {
+    const files = fs
+      .readdirSync(path.join(ROOT, VENDOR), { recursive: true })
+      .filter((rel) => /\.tsx?$/.test(rel))
+      .map((rel) => rel.split(path.sep).join('/'))
+      .sort();
+    const marked = files.filter((rel) => {
+      const m = read(`${VENDOR}/${rel}`).match(NOTICE);
+      if (m) {
+        assert.ok(
+          read(`${VENDOR}/README.md`).includes(`at commit \`${m[1]}\``),
+          `${rel} names the vendored commit`,
+        );
+      }
+      return Boolean(m);
+    });
+    const readme = read(`${VENDOR}/README.md`);
+    const lists = readme
+      .slice(readme.indexOf('**Which files are which:**'))
+      .split('\n\n')[1]
+      .split(/\n- /)
+      .map((item) => [...item.matchAll(/`([^`]+\.tsx?)`/g)].map((m) => m[1]).sort());
+    assert.equal(lists.length, 3, 'three lists: changed, as upstream, own');
+    const [changed, upstream, own] = lists;
+    assert.deepEqual(
+      marked,
+      changed,
+      'the files that start with the change line are the ones listed as changed',
+    );
+    assert.deepEqual(
+      [...changed, ...upstream, ...own].sort(),
+      files,
+      'every vendored file is in one list',
+    );
   });
 });
 

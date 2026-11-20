@@ -1,3 +1,4 @@
+// Changed from neon-js 186ac6b: its import paths only (README.md in this folder lists the changes).
 import { extractNeonAuthCookies } from "../utils/cookies";
 import type { ResolvedNeonAuthLogging } from '../logger';
 import { classifyFetchFailure } from '../network-error';

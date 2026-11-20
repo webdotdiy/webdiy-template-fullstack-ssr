@@ -1,3 +1,4 @@
+// Changed from neon-js 186ac6b: its import paths only (README.md in this folder lists the changes).
 import { jwtVerify } from 'jose';
 import type { SessionData } from '../types';
 import { parseSessionData } from './operations';

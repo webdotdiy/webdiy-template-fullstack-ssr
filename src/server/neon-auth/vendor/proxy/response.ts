@@ -1,3 +1,4 @@
+// Changed from neon-js 186ac6b: its import paths only (README.md in this folder lists the changes).
 import { mintSessionDataFromResponse } from '../session/minting';
 import { parseSetCookies, serializeSetCookie } from '../utils/cookies';
 import type { SessionCookieConfig } from '../config';

@@ -1,3 +1,4 @@
+// Changed from neon-js 186ac6b: its import paths only (README.md in this folder lists the changes).
 import type { RequireSessionData, SessionData, SessionDataCookie } from '../types';
 import { validateSessionData } from './validator';
 import { parseCookies } from 'better-auth/cookies';

@@ -1,3 +1,4 @@
+// Changed from neon-js 186ac6b: its import paths only (README.md in this folder lists the changes).
 import { getSessionDataFromCookie, fetchSessionWithCookie } from './operations';
 import { NEON_AUTH_SESSION_DATA_COOKIE_NAME, NEON_AUTH_SESSION_COOKIE_NAME } from '../constants';
 import { mintSessionDataFromToken } from './minting';

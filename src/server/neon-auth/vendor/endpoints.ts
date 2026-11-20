@@ -1,3 +1,4 @@
+// Changed from neon-js 186ac6b: its import paths only (README.md in this folder lists the changes).
 /**
  * API endpoint configuration for server-side auth methods.
  * This is the single source of truth for mapping method names to REST endpoints.
