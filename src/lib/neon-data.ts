@@ -46,8 +46,16 @@ import { getAuthToken } from './neon-auth';
  *
  *   - Signed out there is no token. A page signed-out visitors and crawlers
  *     must read (public content) gets its data in its route's `loader`, on
- *     the server, through `DATABASE_URL` (the app's own role `app_rw`; see
- *     src/server/routes/example-server-write.ts for the policy it needs):
+ *     the server, through `DATABASE_URL` (the app's own role `app_rw`).
+ *     What a loader returns is in the page's HTML for anyone who opens it,
+ *     and `app_rw` with a `using (true)` policy (as in
+ *     src/server/routes/example-server-write.ts) sees every user's rows: return
+ *     only what any visitor may see. A page's own user's rows load in the
+ *     browser. With RLS on and no policy for `app_rw`, a loader's read sees no
+ *     rows (and no error); for a public read, give `app_rw` a `for select`
+ *     policy on what is public:
+ *
+ *       create policy public_read on posts for select to app_rw using (published);
  *
  *       import { env } from 'cloudflare:workers';
  *       import { neon } from '@neondatabase/serverless';
@@ -55,7 +63,7 @@ import { getAuthToken } from './neon-auth';
  *
  *       export async function loader() {
  *         const sql = neon(requireEnv(env, 'DATABASE_URL'));
- *         return { tasks: await sql`select id, title from tasks order by title limit 50` };
+ *         return { posts: await sql`select id, title from posts where published order by title limit 50` };
  *       }
  *
  *     In a route module a binding's value has no type: read it with

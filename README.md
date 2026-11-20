@@ -50,7 +50,7 @@ pnpm cf-typegen  # wrangler types: regenerate the binding types
 
 - **Bindings** (secrets, the database URL): `import { env } from 'cloudflare:workers'` in loaders, actions and server code, each read with `requireEnv(env, 'DATABASE_URL')` from `src/server/env.ts` (in a route module a binding's value has no type). There is no load context (`context.cloudflare` throws in React Router 8; lint refuses it).
 - **Browser-only code** (`window`, `localStorage`, the auth client) runs in effects, event handlers or a `clientLoader`, never during render. Nothing random or time-based in what a page renders: the server's HTML and the browser's first render must match.
-- **A page's data** comes from its route `loader`; its title and description from its `meta` export (`meta` receives `loaderData`). Long lists are paginated: a page is rendered within the Worker's CPU allowance.
+- **A page's public data** comes from its route `loader`; a signed-in user's own data loads in the browser (see `src/lib/neon-auth.ts`). A page's title and description come from its `meta` export (`meta` receives `loaderData`). Long lists are paginated: a page is rendered within the Worker's CPU allowance.
 
 ## Neon (the database and sign-in)
 

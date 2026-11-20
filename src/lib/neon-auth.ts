@@ -34,7 +34,9 @@ import { useSyncExternalStore } from 'react';
  *   For the Data API or this app's own protected /api/* routes:
  *     const token = await getAuthToken(); // null when signed out
  *     // `Authorization: Bearer <token>`; createDataClient() in
- *     // src/lib/neon-data.ts attaches it already.
+ *     // src/lib/neon-data.ts attaches it already. To a protected /api/*
+ *     // route, send it with the typed client (src/lib/api.ts):
+ *     const res = await api.api.health.$get({}, { headers: { Authorization: `Bearer ${token}` } });
  *
  * Never call getAuthClient() or getAuthToken() in a loader, an action, a
  * component's render or server code: they throw there. A loader or action has

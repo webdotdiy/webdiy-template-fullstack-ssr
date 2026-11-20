@@ -925,6 +925,19 @@ describe('the server and browser helpers', () => {
       () => requireEnv({}, 'DATABASE_URL'),
       /DATABASE_URL is not set .*restart the dev server/s,
     );
+    // A database binding is missing first of all because the database is not turned on yet.
+    for (const name of ['DATABASE_URL', 'NEON_AUTH_COOKIE_SECRET']) {
+      assert.throws(
+        () => requireEnv({}, name),
+        new RegExp(
+          `If the project's database is not turned on yet, it has no ${name}: ask the person to turn it on\\.`,
+        ),
+      );
+    }
+    assert.throws(
+      () => requireEnv({}, 'STRIPE_SECRET_KEY'),
+      (error) => !/database/.test(error.message) && /restart the dev server/.test(error.message),
+    );
     assert.throws(
       () => requireEnv({ DATABASE_URL: '' }, 'DATABASE_URL'),
       /DATABASE_URL is not set/,
@@ -973,6 +986,7 @@ describe('the usage notes', () => {
       'a page load sends no `Authorization` header',
       'never read the session cookie yourself',
       'await verifyAuthToken(c.req.raw)',
+      'send it with the typed client',
     ],
     'src/lib/neon-data.ts': [
       'no need to read the packages in node_modules',
@@ -991,6 +1005,11 @@ describe('the usage notes', () => {
       "in its route's `loader`",
       "neon(requireEnv(env, 'DATABASE_URL'))",
       'never where a module loads',
+      "What a loader returns is in the page's HTML for anyone who opens it",
+      "sees every user's rows: return only what any visitor may see",
+      "A page's own user's rows load in the browser",
+      'sees no rows (and no error)',
+      'create policy public_read on posts for select to app_rw using (published);',
     ],
     'src/server/routes/example-server-write.ts': [
       'no need to read the packages in node_modules',
@@ -1004,16 +1023,22 @@ describe('the usage notes', () => {
       "neon(requireEnv(env, 'DATABASE_URL'))",
       'z.email()',
       'create policy server_access on tasks to app_rw',
+      'a role no policy applies to sees no rows and can write none',
+    ],
+    'README.md': [
+      "**A page's public data** comes from its route `loader`; a signed-in user's own data loads in the browser",
+      'pnpm check # react-router typegen, tsc -b, eslint',
     ],
   };
 
   for (const [file, phrases] of Object.entries(NOTES)) {
     test(`${file} says how to use it`, () => {
       const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
-      // The header as one line: each comment line's ` * ` (and a `// ` inside an example) joined by a space.
-      const header = source
-        .slice(0, source.indexOf('*/') + 2)
-        .replace(/\n \*\s*(?:\/\/\s*)?/g, ' ');
+      // The header as one line: each comment line's ` * ` (and a `// ` inside an example) joined by a space;
+      // a Markdown file whole, its spaces collapsed.
+      const header = file.endsWith('.md')
+        ? source.replace(/[ \t]+/g, ' ')
+        : source.slice(0, source.indexOf('*/') + 2).replace(/\n \*\s*(?:\/\/\s*)?/g, ' ');
       const missing = phrases.filter((phrase) => !header.includes(phrase));
       assert.deepEqual(missing, [], `${file}'s header comment no longer says these`);
     });
@@ -1183,8 +1208,11 @@ const NOTE_CODE = [
   {
     note: 'src/lib/neon-auth.ts',
     where: 'browser',
-    pieces: ['const token = await getAuthToken();'],
-    tail: 'return token;',
+    pieces: [
+      'const token = await getAuthToken();',
+      'const res = await api.api.health.$get({}, { headers: { Authorization: `Bearer ${token}` } });',
+    ],
+    tail: 'return res;',
   },
   {
     note: 'src/lib/neon-data.ts',
@@ -1209,7 +1237,7 @@ import { requireEnv } from '@/server/env';
 
 export async function loader() {
   const sql = neon(requireEnv(env, 'DATABASE_URL'));
-  return { tasks: await sql\`select id, title from tasks order by title limit 50\` };
+  return { posts: await sql\`select id, title from posts where published order by title limit 50\` };
 }`,
     ],
   },
@@ -1375,6 +1403,32 @@ function placeNoteCode() {
 }
 
 describe('the code the notes teach', () => {
+  // A type-check can't tell an option the client ignores from one it sends: run the note's line itself.
+  test('the typed client sends the token the way the notes show it', async () => {
+    const { hc } = await import('hono/client');
+    const piece = NOTE_CODE.flatMap((entry) => entry.pieces).find((p) =>
+      p.includes('Bearer ${token}'),
+    );
+    assert.ok(piece, "neon-auth.ts's notes show the token sent with the typed client");
+    const sent = [];
+    const api = hc('http://check.example/', {
+      fetch: async (input, init) => {
+        const headers = new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : undefined),
+        );
+        sent.push(headers.get('authorization'));
+        return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const AsyncFunction = (async () => {}).constructor;
+    const res = await new AsyncFunction('api', 'token', `${piece}\nreturn res;`)(
+      api,
+      'check-token',
+    );
+    assert.equal(res.status, 200);
+    assert.deepEqual(sent, ['Bearer check-token']);
+  });
+
   test('every NOTE_CODE piece is written in its note as it is compiled', async () => {
     const missing = [];
 

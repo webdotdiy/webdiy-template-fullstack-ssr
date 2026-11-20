@@ -17,9 +17,10 @@ import { verifyAuthToken } from '../neon-auth/require-user';
  *
  * `DATABASE_URL` connects as the app's own database role, `app_rw`. It is not
  * a signed-in user, so a policy keyed on `auth.user_id()` never lets it
- * through, and with RLS on, a role no policy applies to is denied. Give every
- * table this route touches a policy for `app_rw`, and scope the user policies
- * to `authenticated` (the Data API's role for signed-in users):
+ * through, and with RLS on, a role no policy applies to sees no rows and can
+ * write none. Give every table this route touches a policy for `app_rw`, and
+ * scope the user policies to `authenticated` (the Data API's role for
+ * signed-in users):
  *
  *   create policy server_access on tasks to app_rw using (true) with check (true);
  *   create policy own_tasks on tasks to authenticated using (created_by = auth.user_id());
